@@ -6,7 +6,7 @@
 /*============================================================
  * MiniMax — eval_ctx
  *
- * Negamax without pruning. Caller manages memory.
+ * Negamax with alpha-beta pruning. Caller manages memory.
  *============================================================*/
 int MiniMax::eval_ctx(
     State *state,
@@ -14,7 +14,9 @@ int MiniMax::eval_ctx(
     GameHistory& history,
     int ply,
     SearchContext& ctx,
-    const MMParams& p
+    const MMParams& p,
+    int alpha,
+    int beta
 ){
     ctx.nodes++;
     if(ply > ctx.seldepth){
@@ -58,7 +60,7 @@ int MiniMax::eval_ctx(
         return score;
     }
 
-    /* === Negamax loop === */
+    /* === Negamax loop with alpha-beta pruning === */
     int best_score = M_MAX;
 
     for(auto& action : state->legal_actions){
@@ -69,8 +71,15 @@ int MiniMax::eval_ctx(
         bool same = next->same_player_as_parent();
 
         // [Hackathon TODO 3-3]
-        // search the child one level deeper
-        int child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p);
+        // search the child one level deeper with alpha-beta window
+        int child_score;
+        if(p.use_alpha_beta){
+            // Pass negated windows for opponent's perspective
+            child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+        } else {
+            // Legacy mode without alpha-beta
+            child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -100000, 100000);
+        }
 
         // [Hackathon TODO 3-4]
         // convert raw to the current player's perspective.
@@ -89,6 +98,16 @@ int MiniMax::eval_ctx(
             best_score = score;
         }
 
+        // Alpha-beta pruning: update alpha and check for cutoff
+        if(p.use_alpha_beta){
+            if(best_score > alpha){
+                alpha = best_score;
+            }
+            if(alpha >= beta){
+                ctx.beta_cutoffs++;  // Statistics
+                break;  // Beta cutoff
+            }
+        }
     }
 
     history.pop(state->hash());
@@ -121,29 +140,44 @@ SearchResult MiniMax::search(
     int move_index = 0;
     int total_moves = (int)state->legal_actions.size();
 
+    // Root node alpha-beta: start with full window
+    int alpha = -100000;
+    int beta = 100000;
+
     for(auto& action : state->legal_actions){
         /* [ Hackathon TODO 4-1 ]
          * search this move like TODO 3, but starting from the root */
         State* next = state->next_state(action);
         
         GameHistory root_history;
-        int score = eval_ctx(next, depth - 1, root_history, 1, ctx, p);
+        int score;
+        if(p.use_alpha_beta){
+            score = eval_ctx(next, depth - 1, root_history, 1, ctx, p, -beta, -alpha);
+        } else {
+            score = eval_ctx(next, depth - 1, root_history, 1, ctx, p, -100000, 100000);
+        }
+        
         if(!next->same_player_as_parent()){
             score = -score;
         }
         
         delete next;
 
-            if(score > best_score){
-                // [ Hackathon TODO 4-2 ]
-                // keep this move if it is the best so far
-                best_score = score;
-                result.best_move = action;
+        if(score > best_score){
+            // [ Hackathon TODO 4-2 ]
+            // keep this move if it is the best so far
+            best_score = score;
+            result.best_move = action;
 
-                if(p.report_partial && ctx.on_root_update){
-                   ctx.on_root_update({result.best_move, best_score, depth, move_index + 1, total_moves});
-                }
-            }  
+            if(p.report_partial && ctx.on_root_update){
+               ctx.on_root_update({result.best_move, best_score, depth, move_index + 1, total_moves});
+            }
+
+            // Update alpha at root
+            if(p.use_alpha_beta && best_score > alpha){
+                alpha = best_score;
+            }
+        }
         move_index++;
     }
 
@@ -163,6 +197,8 @@ ParamMap MiniMax::default_params(){
         {"UseKPEval", "true"},
         {"UseEvalMobility", "true"},
         {"ReportPartial", "true"},
+        {"UseAlphaBeta", "true"},
+        {"EnableKillerMoves", "true"},
     };
 }
 
@@ -171,5 +207,7 @@ std::vector<ParamDef> MiniMax::param_defs(){
         {"UseKPEval", ParamDef::CHECK, "true"},
         {"UseEvalMobility", ParamDef::CHECK, "true"},
         {"ReportPartial", ParamDef::CHECK, "true"},
+        {"UseAlphaBeta", ParamDef::CHECK, "true"},
+        {"EnableKillerMoves", ParamDef::CHECK, "true"},
     };
 }

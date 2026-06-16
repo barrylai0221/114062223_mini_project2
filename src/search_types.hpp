@@ -17,6 +17,7 @@ struct RootUpdate {
 
 struct SearchContext {
     uint64_t nodes = 0;
+    uint64_t beta_cutoffs = 0;  // Alpha-beta pruning statistics
     int seldepth = 0;
     bool stop = false;
     ParamMap params;
@@ -24,6 +25,7 @@ struct SearchContext {
 
     void reset(){
         nodes = 0;
+        beta_cutoffs = 0;
         seldepth = 0;
     }
 };
