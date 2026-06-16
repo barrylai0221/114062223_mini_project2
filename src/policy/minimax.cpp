@@ -68,11 +68,19 @@ int MiniMax::eval_ctx(
     history.push(zobrist);
 
     if(depth <= 0){
-        int score = state->evaluate(
-            p.use_kp_eval, p.use_eval_mobility, &history
-        ); 
-        history.pop(zobrist);
-        return score;
+        // Call quiescence search to handle volatile positions
+        if(p.use_quiescence_search){
+            int score = quiescence_search(state, 0, 4, history, ply, ctx, p, alpha, beta);
+            history.pop(zobrist);
+            return score;
+        } else {
+            // Direct evaluation (legacy)
+            int score = state->evaluate(
+                p.use_kp_eval, p.use_eval_mobility, &history
+            ); 
+            history.pop(zobrist);
+            return score;
+        }
     }
 
     /* === Negamax loop with alpha-beta pruning === */
@@ -137,6 +145,109 @@ int MiniMax::eval_ctx(
     }
     
     return best_score;
+}
+
+
+/*============================================================
+ * MiniMax — quiescence_search
+ *
+ * Search only capture moves until position stabilizes.
+ * Solves horizon effect by evaluating truly quiet positions.
+ *============================================================*/
+int MiniMax::quiescence_search(
+    State *state,
+    int depth,
+    int max_qd,
+    GameHistory& history,
+    int ply,
+    SearchContext& ctx,
+    const MMParams& p,
+    int alpha,
+    int beta
+){
+    ctx.nodes++;
+    if(ply > ctx.seldepth){
+        ctx.seldepth = ply;
+    }
+    if(ctx.stop){
+        return 0;
+    }
+
+    /* === Terminal checks === */
+    if(state->game_state == WIN){
+        return P_MAX - ply;
+    }
+
+    if(state->game_state == DRAW){
+        return 0;
+    }
+
+    /* === Standing pat: evaluate if no captures improve position === */
+    int stand_pat = state->evaluate(
+        p.use_kp_eval, p.use_eval_mobility, &history
+    );
+
+    // If position is good enough (alpha cutoff from evaluation alone)
+    if(stand_pat >= beta){
+        return stand_pat;
+    }
+
+    if(stand_pat > alpha){
+        alpha = stand_pat;
+    }
+
+    /* === Quiescence depth limit === */
+    if(depth <= -max_qd){
+        // Stop quiescence search if too deep
+        return stand_pat;
+    }
+
+    /* === Get capture moves only === */
+    std::vector<Move> captures;
+    state->get_capture_actions(captures);
+
+    if(captures.empty()){
+        // No captures available, position is quiet
+        return stand_pat;
+    }
+
+    /* === Search captures with alpha-beta === */
+    uint64_t zobrist = state->hash();
+    history.push(zobrist);
+
+    for(auto& action : captures){
+        State* next = state->next_state(action);
+        bool same = next->same_player_as_parent();
+
+        int child_score = quiescence_search(
+            next, depth - 1, max_qd, history, ply + 1, ctx, p, -beta, -alpha
+        );
+
+        int score;
+        if(same){
+            score = child_score;
+        } else {
+            score = -child_score;
+        }
+
+        delete next;
+
+        if(score > stand_pat){
+            stand_pat = score;
+        }
+
+        if(stand_pat > alpha){
+            alpha = stand_pat;
+        }
+
+        if(alpha >= beta){
+            ctx.beta_cutoffs++;
+            break;  // Beta cutoff
+        }
+    }
+
+    history.pop(zobrist);
+    return stand_pat;
 }
 
 
@@ -234,6 +345,7 @@ ParamMap MiniMax::default_params(){
         {"UseAlphaBeta", "true"},
         {"EnableKillerMoves", "true"},
         {"UseTranspositionTable", "true"},
+        {"UseQuiescenceSearch", "true"},
     };
 }
 
@@ -245,5 +357,6 @@ std::vector<ParamDef> MiniMax::param_defs(){
         {"UseAlphaBeta", ParamDef::CHECK, "true"},
         {"EnableKillerMoves", ParamDef::CHECK, "true"},
         {"UseTranspositionTable", ParamDef::CHECK, "true"},
+        {"UseQuiescenceSearch", ParamDef::CHECK, "true"},
     };
 }

@@ -671,6 +671,117 @@ void State::get_legal_actions(){
 }
 
 
+/*============================================================
+ * Get capture moves only (for quiescence search)
+ *============================================================*/
+void State::get_capture_actions(std::vector<Move>& captures) const{
+    captures.clear();
+    captures.reserve(32);
+    
+    auto self_board = this->board.board[this->player];
+    auto oppn_board = this->board.board[1 - this->player];
+    
+    int now_piece, oppn_piece;
+    for(int i=0; i<BOARD_H; i+=1){
+        for(int j=0; j<BOARD_W; j+=1){
+            if((now_piece=self_board[i][j])){
+                switch(now_piece){
+                    case 1: //pawn
+                        if(this->player && i<BOARD_H-1){
+                            //black
+                            if(j<BOARD_W-1 && (oppn_piece=oppn_board[i+1][j+1])>0){
+                                captures.push_back(Move(Point(i, j), Point(i+1, j+1)));
+                            }
+                            if(j>0 && (oppn_piece=oppn_board[i+1][j-1])>0){
+                                captures.push_back(Move(Point(i, j), Point(i+1, j-1)));
+                            }
+                        }else if(!this->player && i>0){
+                            //white
+                            if(j<BOARD_W-1 && (oppn_piece=oppn_board[i-1][j+1])>0){
+                                captures.push_back(Move(Point(i, j), Point(i-1, j+1)));
+                            }
+                            if(j>0 && (oppn_piece=oppn_board[i-1][j-1])>0){
+                                captures.push_back(Move(Point(i, j), Point(i-1, j-1)));
+                            }
+                        }
+                        break;
+
+                    case 2: //rook
+                    case 4: //bishop
+                    case 5: //queen
+                        int st, end;
+                        switch(now_piece){
+                            case 2: st=0; end=4; break; //rook
+                            case 4: st=4; end=8; break; //bishop
+                            case 5: st=0; end=8; break; //queen
+                            default: st=0; end=-1;
+                        }
+                        for(int part=st; part<end; part+=1){
+                            auto move_list = move_table_rook_bishop[part];
+                            for(int k=0; k<std::max(BOARD_H, BOARD_W); k+=1){
+                                int p[2] = {move_list[k][0] + i, move_list[k][1] + j};
+
+                                if(p[0]>=BOARD_H || p[0]<0 || p[1]>=BOARD_W || p[1]<0){
+                                    break;
+                                }
+                                now_piece = self_board[p[0]][p[1]];
+                                if(now_piece){
+                                    break;
+                                }
+
+                                oppn_piece = oppn_board[p[0]][p[1]];
+                                if(oppn_piece){
+                                    captures.push_back(Move(Point(i, j), Point(p[0], p[1])));
+                                    break;
+                                }
+                            }
+                        }
+                        break;
+
+                    case 3: //knight
+                        for(auto move: move_table_knight){
+                            int p[2] = {move[0] + i, move[1] + j};
+
+                            if(p[0]>=BOARD_H || p[0]<0 || p[1]>=BOARD_W || p[1]<0){
+                                continue;
+                            }
+                            now_piece = self_board[p[0]][p[1]];
+                            if(now_piece){
+                                continue;
+                            }
+
+                            oppn_piece = oppn_board[p[0]][p[1]];
+                            if(oppn_piece>0){
+                                captures.push_back(Move(Point(i, j), Point(p[0], p[1])));
+                            }
+                        }
+                        break;
+
+                    case 6: //king
+                        for(auto move: move_table_king){
+                            int p[2] = {move[0] + i, move[1] + j};
+
+                            if(p[0]>=BOARD_H || p[0]<0 || p[1]>=BOARD_W || p[1]<0){
+                                continue;
+                            }
+                            now_piece = self_board[p[0]][p[1]];
+                            if(now_piece){
+                                continue;
+                            }
+
+                            oppn_piece = oppn_board[p[0]][p[1]];
+                            if(oppn_piece>0){
+                                captures.push_back(Move(Point(i, j), Point(p[0], p[1])));
+                            }
+                        }
+                        break;
+                }
+            }
+        }
+    }
+}
+
+
 const char piece_table[2][7][5] = {
   {" ", "♙", "♖", "♘", "♗", "♕", "♔"},
   {" ", "♟", "♜", "♞", "♝", "♛", "♚"}

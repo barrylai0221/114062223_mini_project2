@@ -10,6 +10,7 @@ struct MMParams {
     bool use_alpha_beta = true;     // Enable alpha-beta pruning
     bool enable_killer_moves = true; // Enable killer move heuristic
     bool use_transposition_table = true; // Enable transposition table
+    bool use_quiescence_search = true;   // Enable quiescence search
 
     static MMParams from_map(const ParamMap& m){
         MMParams p;
@@ -19,6 +20,7 @@ struct MMParams {
         p.use_alpha_beta    = param_bool(m, "UseAlphaBeta", true);
         p.enable_killer_moves = param_bool(m, "EnableKillerMoves", true);
         p.use_transposition_table = param_bool(m, "UseTranspositionTable", true);
+        p.use_quiescence_search = param_bool(m, "UseQuiescenceSearch", true);
         return p;
     }
 };
@@ -35,6 +37,20 @@ public:
         int alpha = -100000,
         int beta = 100000
     );
+    
+    // Quiescence search: search only captures until position is quiet
+    static int quiescence_search(
+        State *state,
+        int depth,
+        int max_qd,
+        GameHistory& history,
+        int ply,
+        SearchContext& ctx,
+        const MMParams& p,
+        int alpha = -100000,
+        int beta = 100000
+    );
+    
     static SearchResult search(
         State *state,
         int depth,

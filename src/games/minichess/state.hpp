@@ -53,6 +53,7 @@ public:
     void get_legal_actions() override;
     void get_legal_actions_naive();
     void get_legal_actions_bitboard();
+    void get_capture_actions(std::vector<Move>& captures) const;
     std::string encode_output() const override;
     std::string encode_state();
 
