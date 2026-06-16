@@ -1,12 +1,15 @@
 #include <utility>
+#include <memory>
 #include "state.hpp"
 #include "minimax.hpp"
+#include "transposition_table.hpp"
 
 
 /*============================================================
  * MiniMax — eval_ctx
  *
- * Negamax with alpha-beta pruning. Caller manages memory.
+ * Negamax with alpha-beta pruning and transposition table.
+ * Caller manages memory.
  *============================================================*/
 int MiniMax::eval_ctx(
     State *state,
@@ -24,6 +27,18 @@ int MiniMax::eval_ctx(
     }
     if(ctx.stop){
         return 0;
+    }
+
+    /* === Transposition table lookup === */
+    uint64_t zobrist = state->hash();
+    int tt_score = 0;
+    uint32_t tt_move = 0;
+    
+    if(p.use_transposition_table && depth > 0 && ctx.tt){
+        if(ctx.tt->lookup(zobrist, depth, alpha, beta, tt_score, tt_move)){
+            ctx.tt_hits++;
+            return tt_score;
+        }
     }
 
     /* === Lazy move generation (sets game_state) === */
@@ -50,18 +65,20 @@ int MiniMax::eval_ctx(
     if(state->check_repetition(history, rep_score)){
         return rep_score;
     }
-    history.push(state->hash());
+    history.push(zobrist);
 
     if(depth <= 0){
         int score = state->evaluate(
             p.use_kp_eval, p.use_eval_mobility, &history
         ); 
-        history.pop(state->hash());
+        history.pop(zobrist);
         return score;
     }
 
     /* === Negamax loop with alpha-beta pruning === */
     int best_score = M_MAX;
+    int alpha_orig = alpha;  // Save original alpha for bound determination
+    BoundType bound_type = BOUND_UPPER;  // Assume upper bound initially
 
     for(auto& action : state->legal_actions){
         // [ Hackathon TODO 3-2 ]
@@ -96,6 +113,7 @@ int MiniMax::eval_ctx(
         // update best_score if this child is better.
         if(score > best_score){
             best_score = score;
+            bound_type = BOUND_EXACT;
         }
 
         // Alpha-beta pruning: update alpha and check for cutoff
@@ -105,12 +123,19 @@ int MiniMax::eval_ctx(
             }
             if(alpha >= beta){
                 ctx.beta_cutoffs++;  // Statistics
+                bound_type = BOUND_LOWER;
                 break;  // Beta cutoff
             }
         }
     }
 
-    history.pop(state->hash());
+    history.pop(zobrist);
+    
+    /* === Store in transposition table === */
+    if(p.use_transposition_table && ctx.tt){
+        ctx.tt->store(zobrist, best_score, depth, bound_type);
+    }
+    
     return best_score;
 }
 
@@ -119,6 +144,7 @@ int MiniMax::eval_ctx(
  * MiniMax — search
  *
  * Iterate legal moves, call eval_ctx, return SearchResult.
+ * Initialize transposition table at search root.
  *============================================================*/
 SearchResult MiniMax::search(
     State *state,
@@ -128,13 +154,21 @@ SearchResult MiniMax::search(
 ){
     ctx.reset();
     MMParams p = MMParams::from_map(ctx.params);
+    
+    /* === Initialize transposition table === */
+    if(p.use_transposition_table && !ctx.tt){
+        ctx.tt = std::make_shared<TranspositionTable>(32);  // 32 MB
+    }
+    if(ctx.tt){
+        ctx.tt->new_search();
+    }
+    
     SearchResult result;
     result.depth = depth;
 
     if(!state->legal_actions.size()){
         state->get_legal_actions();
     }
-
 
     int best_score = M_MAX - 10;
     int move_index = 0;
@@ -185,7 +219,7 @@ SearchResult MiniMax::search(
     // update result and return
     result.score = best_score;
 
-        return result;
+    return result;
 } 
 
 
@@ -199,6 +233,7 @@ ParamMap MiniMax::default_params(){
         {"ReportPartial", "true"},
         {"UseAlphaBeta", "true"},
         {"EnableKillerMoves", "true"},
+        {"UseTranspositionTable", "true"},
     };
 }
 
@@ -209,5 +244,6 @@ std::vector<ParamDef> MiniMax::param_defs(){
         {"ReportPartial", ParamDef::CHECK, "true"},
         {"UseAlphaBeta", ParamDef::CHECK, "true"},
         {"EnableKillerMoves", ParamDef::CHECK, "true"},
+        {"UseTranspositionTable", ParamDef::CHECK, "true"},
     };
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include "search_types.hpp"
 #include "game_history.hpp"
+#include "transposition_table.hpp"
 
 struct MMParams {
     bool use_kp_eval = true;
@@ -8,6 +9,7 @@ struct MMParams {
     bool report_partial = true;
     bool use_alpha_beta = true;     // Enable alpha-beta pruning
     bool enable_killer_moves = true; // Enable killer move heuristic
+    bool use_transposition_table = true; // Enable transposition table
 
     static MMParams from_map(const ParamMap& m){
         MMParams p;
@@ -16,6 +18,7 @@ struct MMParams {
         p.report_partial    = param_bool(m, "ReportPartial", true);
         p.use_alpha_beta    = param_bool(m, "UseAlphaBeta", true);
         p.enable_killer_moves = param_bool(m, "EnableKillerMoves", true);
+        p.use_transposition_table = param_bool(m, "UseTranspositionTable", true);
         return p;
     }
 };

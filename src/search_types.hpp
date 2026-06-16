@@ -4,8 +4,10 @@
 #include <vector>
 #include <cstdint>
 #include <functional>
+#include <memory>
 
 class State;
+class TranspositionTable;
 
 struct RootUpdate {
     Move best_move;
@@ -18,14 +20,17 @@ struct RootUpdate {
 struct SearchContext {
     uint64_t nodes = 0;
     uint64_t beta_cutoffs = 0;  // Alpha-beta pruning statistics
+    uint64_t tt_hits = 0;       // Transposition table hits
     int seldepth = 0;
     bool stop = false;
     ParamMap params;
+    std::shared_ptr<TranspositionTable> tt;  // Transposition table
     std::function<void(const RootUpdate&)> on_root_update;
 
     void reset(){
         nodes = 0;
         beta_cutoffs = 0;
+        tt_hits = 0;
         seldepth = 0;
     }
 };
