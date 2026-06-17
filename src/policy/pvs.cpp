@@ -4,8 +4,9 @@
 #include "pvs.hpp"
 #include "transposition_table.hpp"
 #include <algorithm>
+#include <array>
 
-// 將 Move 編碼成 32-bit 整數 (假設座標在 0-15 之間)
+// 將 Move 編碼成 32-bit 整數
 static uint32_t encode_move(const Move& move) {
     return (move.first.first << 24) | (move.first.second << 16) | 
            (move.second.first << 8) | move.second.second;
@@ -16,33 +17,59 @@ static bool is_same_move(const Move& move, uint32_t encoded_move) {
     return encode_move(move) == encoded_move;
 }
 
+static bool is_capture_move(const State* state, const Move& move) {
+    return state->piece_at(
+        1 - state->player,
+        static_cast<int>(move.second.first),
+        static_cast<int>(move.second.second)
+    ) > 0;
+}
+
 // MVV-LVA scoring
-// Scores captures based on the value of the victim and aggressor.
-// Higher score is better.
-// Score = (Victim Value * 10) - Aggressor Value
-static int score_move(const State* state, const Move& move, uint32_t tt_best_move_data) {
-    // 1. TT Best Move 優先權最高 (給予極大分數 1000000)
+static int score_move(
+    const State* state,
+    const Move& move,
+    uint32_t tt_best_move_data,
+    const std::array<Move, 2>* killer_slots,
+    bool use_killers
+) {
+    // 1. TT Best Move 優先權最高
     if (tt_best_move_data != 0 && is_same_move(move, tt_best_move_data)) {
         return 1000000;
     }
 
-    int aggressor_type = state->piece_at(state->player, move.first.first, move.first.second);
-    int victim_type = state->piece_at(1 - state->player, move.second.first, move.second.second);
+    if (use_killers && killer_slots != nullptr &&
+        (move == (*killer_slots)[0] || move == (*killer_slots)[1])) {
+        return 500000;
+    }
 
-    if (victim_type > 0) {
-        // This is a capture move
-        static const int piece_values[7] = {0, 10, 50, 30, 30, 90, 900}; // P, R, N, B, Q, K
-        return piece_values[victim_type] * 10 - piece_values[aggressor_type];
+    if (is_capture_move(state, move)) {
+        int aggressor_type = state->piece_at(
+            state->player,
+            static_cast<int>(move.first.first),
+            static_cast<int>(move.first.second)
+        );
+        int victim_type = state->piece_at(
+            1 - state->player,
+            static_cast<int>(move.second.first),
+            static_cast<int>(move.second.second)
+        );
+        static const int piece_values[7] = {0, 10, 50, 30, 30, 90, 900}; 
+        return 100000 + piece_values[victim_type] * 10 - piece_values[aggressor_type];
     }
     
-    // For non-captures, return 0
     return 0;
+}
+
+static const std::array<Move, 2>* killer_slots_for(SearchContext& ctx, int ply) {
+    if (ply < 0 || static_cast<size_t>(ply) >= ctx.killer_moves.size()) {
+        return nullptr;
+    }
+    return &ctx.killer_moves[ply];
 }
 
 /*============================================================
  * PVS — eval_ctx
- *
- * Negamax with Principal Variation Search.
  *============================================================*/
 int PVS::eval_ctx(
     State *state,
@@ -58,6 +85,7 @@ int PVS::eval_ctx(
     if(ply > ctx.seldepth){
         ctx.seldepth = ply;
     }
+    // 【防護網 1】如果已經超時，立刻回傳，不浪費時間
     if(ctx.stop){
         return 0;
     }
@@ -65,12 +93,12 @@ int PVS::eval_ctx(
     uint64_t zobrist = state->hash();
     int tt_score = 0;
     uint32_t tt_move = 0;
-    
-    // 記住原始的 alpha，用於稍後存入 TT 時判斷 UPPER BOUND
     int original_alpha = alpha;
     
-    if(p.use_transposition_table && depth > 0 && ctx.tt){
-        if(ctx.tt->lookup(zobrist, depth, alpha, beta, tt_score, tt_move)){
+    bool tt_hit = false;
+    if(p.use_transposition_table && ctx.tt){
+        tt_hit = ctx.tt->lookup(zobrist, depth, alpha, beta, tt_score, tt_move);
+        if (depth > 0 && tt_hit) {
             ctx.tt_hits++;
             return tt_score;
         }
@@ -94,62 +122,53 @@ int PVS::eval_ctx(
     }
     history.push(zobrist);
 
-    if(depth <= 0){
-        if(p.use_quiescence_search){
-            int score = quiescence_search(state, 0, 4, history, ply, ctx, p, alpha, beta);
-            history.pop(zobrist);
-            return score;
-        } else {
-            int score = state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history); 
-            history.pop(zobrist);
-            return score;
-        }
+    const auto* killers = killer_slots_for(ctx, ply);
+
+    if(state->legal_actions.size() > 1){
+        std::sort(state->legal_actions.begin(), state->legal_actions.end(),
+            [&](const Move& a, const Move& b){
+                return score_move(state, a, tt_move, killers, true)
+                     > score_move(state, b, tt_move, killers, true);
+            });
     }
 
-    int best_score = -1000000; // 統一使用明確的負數，避免 M_MAX 常數被誤定義為正數
+    if(depth <= 0){
+        int score;
+        if(p.use_quiescence_search){
+            score = quiescence_search(state, 0, 4, history, ply, ctx, p, alpha, beta);
+        } else {
+            score = state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history); 
+        }
+        history.pop(zobrist);
+        return score;
+    }
+
+    int best_score = -1000000;
     bool first_move = true;
     Move best_move;
     bool found_best_move = false;
-
-    // Sort moves using MVV-LVA (並且如果有 TT_move，應該讓它排第一)
-    if (p.use_mvv_lva) {
-        std::sort(state->legal_actions.begin(), state->legal_actions.end(), 
-            [&](const Move& a, const Move& b) {
-                // 傳入 tt_move 讓好步優先
-                return score_move(state, a, tt_move) > score_move(state, b, tt_move);
-            });
-    }
 
     for(auto& action : state->legal_actions){
         State* next = state->next_state(action);
         bool same = next->same_player_as_parent();
         int child_score;
 
-        if (p.use_pvs) {
-            if (first_move) {
-                // 第一步：使用完整的 Alpha-Beta 視窗搜尋
-                child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
-                first_move = false;
-            } else {
-                // 後續步驟：使用零視窗 (Zero Window) 測試
-                child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -alpha - 1, -alpha);
-                
-                // 必須先轉換為當前視角的分數
-                int tentative_score = same ? child_score : -child_score;
-                
-                // 如果零視窗測試失敗（代表這步棋比第一步好），且沒有好到引發對手剪枝
-                // 則必須重新用完整的視窗 (-beta, -tentative_score) 搜尋
-                if (tentative_score > alpha && tentative_score < beta) {
-                    child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
-                }
-            }
+        if (p.use_pvs && !first_move) {
+            // Null-window search for subsequent moves
+            child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -alpha - 1, -alpha);
         } else {
-             // 如果不使用 PVS，就跑標準的 Alpha-Beta
+            // Full-window search for the first move or when PVS is disabled
             child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
         }
 
-        // 轉換為當前玩家的分數
         int score = same ? child_score : -child_score;
+
+        // If the null-window search failed high, we must re-search with the full window
+        if (p.use_pvs && !first_move && score > alpha && score < beta) {
+            child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+            score = same ? child_score : -child_score;
+        }
+        
         delete next;
 
         if(score > best_score){
@@ -164,27 +183,26 @@ int PVS::eval_ctx(
 
         if(alpha >= beta){
             ctx.beta_cutoffs++;
-            break; // 觸發 Beta 剪枝
+            if (!is_capture_move(state, action)) {
+                ctx.record_killer(static_cast<size_t>(ply), action);
+            }
+            break; 
         }
     }
 
     history.pop(zobrist);
     
-    // 存入 Transposition Table
+    // 【防護網 3】如果超時了，代表這個 best_score 是不完整的垃圾分數，絕對不准存入 TT！
+    if (ctx.stop) return 0;
+    
     if(p.use_transposition_table && ctx.tt){
         BoundType bound_type = BOUND_EXACT;
-        
-        // 判斷 UPPER BOUND 必須用剛進來這個函數時的 original_alpha
-        // 如果連原本的 alpha 都沒超過，代表這是個爛盤面 (Fail-low)
         if (best_score <= original_alpha) {
             bound_type = BOUND_UPPER;
-        } 
-        // 如果分數 >= beta，代表引發了剪枝，這個分數只是個下限 (Fail-high)
-        else if (best_score >= beta) {
+        } else if (best_score >= beta) {
             bound_type = BOUND_LOWER;
         }
 
-        // 將 best_move 編碼後存入 TT
         uint32_t best_move_encoded = 0; 
         if(found_best_move) {
             best_move_encoded = encode_move(best_move); 
@@ -197,7 +215,7 @@ int PVS::eval_ctx(
 }
 
 /*============================================================
- * PVS — quiescence_search (identical to MiniMax)
+ * PVS — quiescence_search
  *============================================================*/
 int PVS::quiescence_search(
     State *state,
@@ -231,11 +249,9 @@ int PVS::quiescence_search(
     if(stand_pat >= beta){
         return stand_pat;
     }
-
     if(stand_pat > alpha){
         alpha = stand_pat;
     }
-
     if(depth <= -max_qd){
         return stand_pat;
     }
@@ -244,15 +260,13 @@ int PVS::quiescence_search(
     state->get_capture_actions(captures);
 
     if(captures.empty()){
-        // No captures available, position is quiet
         return stand_pat;
     }
 
-    // Sort captures using MVV-LVA
     if (p.use_mvv_lva) {
         std::sort(captures.begin(), captures.end(), 
             [&](const Move& a, const Move& b) {
-                return score_move(state, a, 0) > score_move(state, b, 0);
+                return score_move(state, a, 0, nullptr, false) > score_move(state, b, 0, nullptr, false);
             });
     }
 
@@ -268,14 +282,18 @@ int PVS::quiescence_search(
         int score = same ? child_score : -child_score;
         delete next;
 
+        // 【防護網 4】QS 也一樣，超時就立刻中斷
+        if (ctx.stop) {
+            history.pop(zobrist);
+            return 0;
+        }
+
         if(score > stand_pat){
             stand_pat = score;
         }
-
         if(stand_pat > alpha){
             alpha = stand_pat;
         }
-
         if(alpha >= beta){
             ctx.beta_cutoffs++;
             break;
@@ -304,6 +322,7 @@ SearchResult PVS::search(
     if(ctx.tt){
         ctx.tt->new_search();
     }
+    ctx.prepare_killer_moves(static_cast<size_t>(depth) + 2);
     
     SearchResult best_result_so_far;
     best_result_so_far.depth = 0;
@@ -314,12 +333,10 @@ SearchResult PVS::search(
     }
     if (state->legal_actions.empty()) return best_result_so_far;
 
-    // 預設一個備用步，防止意外
     best_result_so_far.best_move = state->legal_actions[0];
 
-    // ========================================================
-    // 實作 Iterative Deepening (迭代加深)
-    // ========================================================
+    best_result_so_far.best_move = state->legal_actions[0];
+
     for (int current_depth = 1; current_depth <= depth; current_depth++) {
         int best_score = -1000000; 
         int alpha = -1000000;
@@ -330,25 +347,21 @@ SearchResult PVS::search(
         
         Move current_depth_best_move = state->legal_actions[0];
 
-        // 排序：將【上一次深度搜尋】拿到的最佳解排在第一位，讓 PVS 發揮威力
-        if (p.use_mvv_lva) {
-            std::sort(state->legal_actions.begin(), state->legal_actions.end(), 
-                [&](const Move& a, const Move& b) {
-                    if (best_result_so_far.depth > 0) {
-                        bool a_is_best = is_same_move(a, encode_move(best_result_so_far.best_move));
-                        bool b_is_best = is_same_move(b, encode_move(best_result_so_far.best_move));
-                        if (a_is_best && !b_is_best) return true;
-                        if (!a_is_best && b_is_best) return false;
-                    }
-                    // 否則照常使用 MVV-LVA
-                    return score_move(state, a, 0) > score_move(state, b, 0);
-                });
-        }
+        const auto* root_killers = killer_slots_for(ctx, 1);
+        std::sort(state->legal_actions.begin(), state->legal_actions.end(), 
+            [&](const Move& a, const Move& b) {
+                if (best_result_so_far.depth > 0) {
+                    bool a_is_best = is_same_move(a, encode_move(best_result_so_far.best_move));
+                    bool b_is_best = is_same_move(b, encode_move(best_result_so_far.best_move));
+                    if (a_is_best && !b_is_best) return true;
+                    if (!a_is_best && b_is_best) return false;
+                }
+                return score_move(state, a, 0, root_killers, true)
+                     > score_move(state, b, 0, root_killers, true);
+            });
 
         for(auto& action : state->legal_actions){
             State* next = state->next_state(action);
-            
-            // 【失憶症修正】：直接傳遞真實的 history，絕對不能在這裡 new 一個空的！
             int child_score;
 
             if (p.use_pvs) {
@@ -359,7 +372,7 @@ SearchResult PVS::search(
                     child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -alpha - 1, -alpha);
                     
                     int tentative_score = next->same_player_as_parent() ? child_score : -child_score;
-                    if (tentative_score > alpha && tentative_score < beta) {
+                    if (tentative_score > alpha && tentative_score < beta && !ctx.stop) { // 加上 !ctx.stop 保險
                         child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -beta, -alpha);
                     }
                 }
@@ -370,7 +383,6 @@ SearchResult PVS::search(
             int score = next->same_player_as_parent() ? child_score : -child_score;
             delete next;
 
-            // 救命防護網：如果超時被觸發了，中止這個深度的後續計算！
             if (ctx.stop) break;
 
             if(score > best_score){
@@ -388,26 +400,21 @@ SearchResult PVS::search(
             move_index++;
         }
         
-        // 救命防護網：如果迴圈是因為超時斷掉的，保留【上一層安全算完】的 best_result_so_far！
         if (ctx.stop) {
-            break;
+            break; // 被超時打斷，放棄這個深度的結果
         }
         
-        // 成功跑完這個深度！安全地更新到最終結果中
+        // 安全跑完，保留結果
         best_result_so_far.depth = current_depth;
         best_result_so_far.score = best_score;
         best_result_so_far.best_move = current_depth_best_move;
         
-        // 如果已經算到絕殺步 (Mate)，提早結束
         if (best_score > 900000) break;
     }
 
     return best_result_so_far;
 } 
 
-/*============================================================
- * PVS — default_params / param_defs
- *============================================================*/
 ParamMap PVS::default_params(){
     return {
         {"UseKPEval", "true"},
@@ -417,7 +424,7 @@ ParamMap PVS::default_params(){
         {"UseTranspositionTable", "true"},
         {"UseQuiescenceSearch", "true"},
         {"UsePVS", "true"},
-        {"UseMVVLVA", "true"}, // 記得把 MVVLVA 加進參數
+        {"UseMVVLVA", "true"}, 
     };
 }
 

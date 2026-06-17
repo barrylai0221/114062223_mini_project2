@@ -288,6 +288,8 @@ static void do_search(
         return !ctx.stop;
     };
 
+    std::cerr << "[UBGI DEBUG] do_search started. movetime=" << movetime_ms << "ms, depth=" << max_depth << std::endl;
+
     if(state.legal_actions.empty()){
         if(alive()){
             send("bestmove 0000");
@@ -464,8 +466,11 @@ static void do_search(
     }
 
     if(alive()){
+        std::cerr << "[UBGI DEBUG] do_search finished. Sending bestmove: " << move_to_str(best_move) << std::endl;
         send("bestmove " + move_to_str(best_move));
         g_bestmove_sent = true;
+    } else {
+        std::cerr << "[UBGI DEBUG] do_search interrupted. Not sending bestmove." << std::endl;
     }
     g_searching = false;
 }
@@ -505,6 +510,9 @@ static void cmd_go(std::istringstream& iss){
     g_bestmove_sent = false;
     uint32_t gen = g_search_gen.load();
     g_best_move = Move();
+
+    std::cerr << "[UBGI DEBUG] go command received. movetime=" << movetime_ms << "ms, depth=" << max_depth << std::endl;
+
     g_search_thread = std::thread(
         do_search, max_depth, movetime_ms, infinite, gen, ctx, g_board, g_player, g_history, g_step
     );

@@ -1,8 +1,74 @@
 #include <utility>
 #include <memory>
+#include <algorithm>
+#include <array>
 #include "state.hpp"
 #include "minimax.hpp"
 #include "transposition_table.hpp"
+
+namespace {
+
+uint32_t encode_move(const Move& move){
+    return (static_cast<uint32_t>(move.first.first) << 24)
+        | (static_cast<uint32_t>(move.first.second) << 16)
+        | (static_cast<uint32_t>(move.second.first) << 8)
+        | static_cast<uint32_t>(move.second.second);
+}
+
+bool is_same_move(const Move& move, uint32_t encoded_move){
+    return encode_move(move) == encoded_move;
+}
+
+bool is_capture_move(const State* state, const Move& move){
+    return state->piece_at(
+        1 - state->player,
+        static_cast<int>(move.second.first),
+        static_cast<int>(move.second.second)
+    ) > 0;
+}
+
+int move_order_score(
+    const State* state,
+    const Move& move,
+    uint32_t tt_best_move,
+    const std::array<Move, 2>* killer_slots,
+    bool use_killers
+){
+    if(tt_best_move != 0 && is_same_move(move, tt_best_move)){
+        return 1'000'000;
+    }
+
+    if(use_killers && killer_slots != nullptr &&
+       (move == (*killer_slots)[0] || move == (*killer_slots)[1])){
+        return 500'000;
+    }
+
+    if(is_capture_move(state, move)){
+        static const int piece_values[7] = {0, 10, 50, 30, 30, 90, 900};
+        const int aggressor_type = state->piece_at(
+            state->player,
+            static_cast<int>(move.first.first),
+            static_cast<int>(move.first.second)
+        );
+        const int victim_type = state->piece_at(
+            1 - state->player,
+            static_cast<int>(move.second.first),
+            static_cast<int>(move.second.second)
+        );
+        return 100'000 + piece_values[victim_type] * 10 - piece_values[aggressor_type];
+    }
+
+    return 0;
+}
+
+const std::array<Move, 2>* killer_slots_for(SearchContext& ctx, int ply){
+    if(ply < 0 || static_cast<size_t>(ply) >= ctx.killer_moves.size()){
+        return nullptr;
+    }
+    return &ctx.killer_moves[ply];
+}
+
+} // namespace
 
 
 /*============================================================
@@ -85,8 +151,18 @@ int MiniMax::eval_ctx(
 
     /* === Negamax loop with alpha-beta pruning === */
     int best_score = M_MAX;
-    int alpha_orig = alpha;  // Save original alpha for bound determination
     BoundType bound_type = BOUND_UPPER;  // Assume upper bound initially
+
+    const auto* killers = killer_slots_for(ctx, ply);
+
+    if(state->legal_actions.size() > 1){
+        std::sort(state->legal_actions.begin(), state->legal_actions.end(),
+            [&](const Move& a, const Move& b){
+                return move_order_score(state, a, tt_move, killers, p.enable_killer_moves)
+                     > move_order_score(state, b, tt_move, killers, p.enable_killer_moves);
+            }
+        );
+    }
 
     for(auto& action : state->legal_actions){
         // [ Hackathon TODO 3-2 ]
@@ -132,6 +208,9 @@ int MiniMax::eval_ctx(
             if(alpha >= beta){
                 ctx.beta_cutoffs++;  // Statistics
                 bound_type = BOUND_LOWER;
+                if(p.enable_killer_moves && !is_capture_move(state, action)){
+                    ctx.record_killer(static_cast<size_t>(ply), action);
+                }
                 break;  // Beta cutoff
             }
         }
@@ -263,6 +342,7 @@ SearchResult MiniMax::search(
     GameHistory& history,
     SearchContext& ctx
 ){
+    (void)history;
     ctx.reset();
     MMParams p = MMParams::from_map(ctx.params);
     
@@ -273,12 +353,23 @@ SearchResult MiniMax::search(
     if(ctx.tt){
         ctx.tt->new_search();
     }
+    ctx.prepare_killer_moves(static_cast<size_t>(depth) + 2);
     
     SearchResult result;
     result.depth = depth;
 
     if(!state->legal_actions.size()){
         state->get_legal_actions();
+    }
+
+    const auto* root_killers = killer_slots_for(ctx, 1);
+    if(state->legal_actions.size() > 1){
+        std::sort(state->legal_actions.begin(), state->legal_actions.end(),
+            [&](const Move& a, const Move& b){
+                return move_order_score(state, a, 0, root_killers, p.enable_killer_moves)
+                     > move_order_score(state, b, 0, root_killers, p.enable_killer_moves);
+            }
+        );
     }
 
     int best_score = M_MAX - 10;
@@ -322,6 +413,8 @@ SearchResult MiniMax::search(
             if(p.use_alpha_beta && best_score > alpha){
                 alpha = best_score;
             }
+        } else if(p.use_alpha_beta && score >= beta && p.enable_killer_moves){
+            ctx.record_killer(1, action);
         }
         move_index++;
     }

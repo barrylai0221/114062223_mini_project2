@@ -1,6 +1,7 @@
 #pragma once
 #include "base_state.hpp"
 #include "search_params.hpp"
+#include <array>
 #include <vector>
 #include <cstdint>
 #include <functional>
@@ -25,6 +26,7 @@ struct SearchContext {
     bool stop = false;
     ParamMap params;
     std::shared_ptr<TranspositionTable> tt;  // Transposition table
+    std::vector<std::array<Move, 2>> killer_moves;  // [ply][0..1]
     std::function<void(const RootUpdate&)> on_root_update;
 
     void reset(){
@@ -32,6 +34,23 @@ struct SearchContext {
         beta_cutoffs = 0;
         tt_hits = 0;
         seldepth = 0;
+        killer_moves.clear();
+    }
+
+    void prepare_killer_moves(size_t max_depth){
+        killer_moves.assign(max_depth + 1, {Move{}, Move{}});
+    }
+
+    void record_killer(size_t ply, const Move& move){
+        if(ply >= killer_moves.size()){
+            return;
+        }
+        auto& slots = killer_moves[ply];
+        if(slots[0] == move){
+            return;
+        }
+        slots[1] = slots[0];
+        slots[0] = move;
     }
 };
 

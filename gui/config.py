@@ -100,6 +100,9 @@ BUILD_DIR = os.path.join(
 # Default AI timeout (seconds)
 DEFAULT_TIMEOUT = 2
 
+# Hard cap for fixed-depth searches so the GUI never waits forever.
+FIXED_DEPTH_TIMEOUT = 10
+
 # AI vs AI delay between moves (seconds)
 AI_VS_AI_DELAY = 0.5
 

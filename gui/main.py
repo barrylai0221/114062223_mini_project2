@@ -564,11 +564,16 @@ class GameApp(EngineManagerMixin, PromotionMixin, DialogsMixin):
             player = self.game_state.player
             side = self.white if player == 0 else self.black
             using_fixed_depth = side.get("depth", 0) > 0
-            if not using_fixed_depth:
-                elapsed = time.time() - getattr(self, "_ai_start_time", 0)
-                kill_after = self.time_limit + 2.0
-                if elapsed > kill_after:
-                    self._force_kill_ai_engine()
+            elapsed = time.time() - getattr(self, "_ai_start_time", 0)
+            kill_after = (
+                _cfg.FIXED_DEPTH_TIMEOUT if using_fixed_depth else self.time_limit + 2.0
+            )
+            if elapsed > kill_after:
+                log.warning(
+                    f"AI search timeout after {elapsed:.1f}s "
+                    f"(fixed_depth={using_fixed_depth}, limit={kill_after:.1f}s)"
+                )
+                self._force_kill_ai_engine()
 
         if self.ai_result.get("ready"):
             move = self.ai_result["move"]

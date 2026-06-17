@@ -313,6 +313,9 @@ class EngineManagerMixin:
         self.ai_thinking = True
         self.ai_result = {"move": None, "depth": 0, "ready": False}
         self.search_info = {}
+        self._best_stable_ai_move = None
+        self._best_stable_ai_score = None
+        self._best_stable_ai_depth = 0
         self._ai_start_time = time.time()
 
         attr = "white_uci_engine" if player == 0 else "black_uci_engine"
@@ -349,13 +352,18 @@ class EngineManagerMixin:
         attr = "white_uci_engine" if player == 0 else "black_uci_engine"
         engine = getattr(self, attr, None)
 
-        # Extract best move from last search info (currmove or pv[0])
+        # Extract best move from the last completed depth if we have one.
         bestmove = None
         info = self.search_info
-        if info.get("pv"):
+        if getattr(self, "_best_stable_ai_move", None) is not None:
+            bestmove = self._best_stable_ai_move
+        elif info.get("pv"):
             bestmove = UBGIEngine.uci_to_move(info["pv"][0])
         elif info.get("currmove"):
             bestmove = UBGIEngine.uci_to_move(info["currmove"])
+
+        if bestmove is None and self.game_state.legal_actions:
+            bestmove = self.game_state.legal_actions[0]
 
         # Kill engine process
         if engine is not None:
@@ -369,6 +377,7 @@ class EngineManagerMixin:
         self.ai_result = {"move": bestmove, "depth": depth, "ready": True}
 
     def _on_uci_info(self, info_dict):
+        raw_score = info_dict.get("score_cp")
         if "score_cp" in info_dict and self.game_state.player == 1:
             info_dict["score_cp"] = -info_dict["score_cp"]
         # Preserve last known PV and currmove for timeout fallback
@@ -376,12 +385,34 @@ class EngineManagerMixin:
             info_dict["pv"] = self.search_info["pv"]
         if "currmove" not in info_dict and "currmove" in self.search_info:
             info_dict["currmove"] = self.search_info["currmove"]
+
+        # Track the best stable move from completed depths only.
+        if raw_score is not None and "pv" in info_dict and info_dict["pv"]:
+            candidate_move = UBGIEngine.uci_to_move(info_dict["pv"][0])
+            candidate_depth = info_dict.get("depth", 0)
+            best_score = getattr(self, "_best_stable_ai_score", None)
+            best_depth = getattr(self, "_best_stable_ai_depth", 0)
+            if (
+                candidate_move is not None
+                and (
+                    best_score is None
+                    or raw_score > best_score
+                    or (raw_score == best_score and candidate_depth >= best_depth)
+                )
+            ):
+                self._best_stable_ai_move = candidate_move
+                self._best_stable_ai_score = raw_score
+                self._best_stable_ai_depth = candidate_depth
+
         self.search_info = info_dict
 
     def _on_uci_bestmove(self, bestmove_str):
         log.info(f"bestmove received: {bestmove_str}")
         if bestmove_str is None:
-            self.ai_result = {"move": None, "depth": 0, "ready": True}
+            fallback = getattr(self, "_best_stable_ai_move", None)
+            if fallback is None and self.game_state.legal_actions:
+                fallback = self.game_state.legal_actions[0]
+            self.ai_result = {"move": fallback, "depth": 0, "ready": True}
             return
 
         move = UBGIEngine.uci_to_move(bestmove_str)
