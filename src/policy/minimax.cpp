@@ -27,12 +27,16 @@ bool is_capture_move(const State* state, const Move& move){
     ) > 0;
 }
 
+int history_score_for(const SearchContext& ctx, const Move& move);
+
 int move_order_score(
     const State* state,
     const Move& move,
     uint32_t tt_best_move,
     const std::array<Move, 2>* killer_slots,
-    bool use_killers
+    bool use_killers,
+    const SearchContext* ctx,
+    bool use_history
 ){
     if(tt_best_move != 0 && is_same_move(move, tt_best_move)){
         return 1'000'000;
@@ -41,6 +45,13 @@ int move_order_score(
     if(use_killers && killer_slots != nullptr &&
        (move == (*killer_slots)[0] || move == (*killer_slots)[1])){
         return 500'000;
+    }
+
+    if(use_history && ctx != nullptr){
+        const int history_score = history_score_for(*ctx, move);
+        if(history_score > 0){
+            return 1'000 + history_score;
+        }
     }
 
     if(is_capture_move(state, move)){
@@ -66,6 +77,23 @@ const std::array<Move, 2>* killer_slots_for(SearchContext& ctx, int ply){
         return nullptr;
     }
     return &ctx.killer_moves[ply];
+}
+
+int history_score_for(const SearchContext& ctx, const Move& move){
+    const auto it = ctx.history_moves.find(make_move_key(move));
+    if(it == ctx.history_moves.end()){
+        return 0;
+    }
+    return it->second;
+}
+
+void record_history(SearchContext& ctx, const Move& move, int depth){
+    const int bonus = depth * depth;
+    auto& score = ctx.history_moves[make_move_key(move)];
+    score += bonus;
+    if(score > 100000){
+        score = 100000;
+    }
 }
 
 } // namespace
@@ -133,6 +161,8 @@ int MiniMax::eval_ctx(
     }
     history.push(zobrist);
 
+    const auto* killers = killer_slots_for(ctx, ply);
+
     if(depth <= 0){
         // Call quiescence search to handle volatile positions
         if(p.use_quiescence_search){
@@ -153,13 +183,11 @@ int MiniMax::eval_ctx(
     int best_score = M_MAX;
     BoundType bound_type = BOUND_UPPER;  // Assume upper bound initially
 
-    const auto* killers = killer_slots_for(ctx, ply);
-
     if(state->legal_actions.size() > 1){
         std::sort(state->legal_actions.begin(), state->legal_actions.end(),
             [&](const Move& a, const Move& b){
-                return move_order_score(state, a, tt_move, killers, p.enable_killer_moves)
-                     > move_order_score(state, b, tt_move, killers, p.enable_killer_moves);
+                return move_order_score(state, a, tt_move, killers, p.enable_killer_moves, &ctx, p.enable_history_moves)
+                     > move_order_score(state, b, tt_move, killers, p.enable_killer_moves, &ctx, p.enable_history_moves);
             }
         );
     }
@@ -210,6 +238,9 @@ int MiniMax::eval_ctx(
                 bound_type = BOUND_LOWER;
                 if(p.enable_killer_moves && !is_capture_move(state, action)){
                     ctx.record_killer(static_cast<size_t>(ply), action);
+                }
+                if(p.enable_history_moves && !is_capture_move(state, action)){
+                    record_history(ctx, action, depth);
                 }
                 break;  // Beta cutoff
             }
@@ -366,8 +397,8 @@ SearchResult MiniMax::search(
     if(state->legal_actions.size() > 1){
         std::sort(state->legal_actions.begin(), state->legal_actions.end(),
             [&](const Move& a, const Move& b){
-                return move_order_score(state, a, 0, root_killers, p.enable_killer_moves)
-                     > move_order_score(state, b, 0, root_killers, p.enable_killer_moves);
+                 return move_order_score(state, a, 0, root_killers, p.enable_killer_moves, &ctx, p.enable_history_moves)
+                     > move_order_score(state, b, 0, root_killers, p.enable_killer_moves, &ctx, p.enable_history_moves);
             }
         );
     }
@@ -416,6 +447,9 @@ SearchResult MiniMax::search(
         } else if(p.use_alpha_beta && score >= beta && p.enable_killer_moves){
             ctx.record_killer(1, action);
         }
+        if(p.use_alpha_beta && score >= beta && p.enable_history_moves){
+            record_history(ctx, action, depth);
+        }
         move_index++;
     }
 
@@ -437,6 +471,7 @@ ParamMap MiniMax::default_params(){
         {"ReportPartial", "true"},
         {"UseAlphaBeta", "true"},
         {"EnableKillerMoves", "true"},
+        {"EnableHistoryHeuristic", "true"},
         {"UseTranspositionTable", "true"},
         {"UseQuiescenceSearch", "true"},
     };
@@ -449,6 +484,7 @@ std::vector<ParamDef> MiniMax::param_defs(){
         {"ReportPartial", ParamDef::CHECK, "true"},
         {"UseAlphaBeta", ParamDef::CHECK, "true"},
         {"EnableKillerMoves", ParamDef::CHECK, "true"},
+        {"EnableHistoryHeuristic", ParamDef::CHECK, "true"},
         {"UseTranspositionTable", ParamDef::CHECK, "true"},
         {"UseQuiescenceSearch", ParamDef::CHECK, "true"},
     };

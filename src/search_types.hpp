@@ -6,9 +6,43 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 
 class State;
 class TranspositionTable;
+
+struct MoveKey {
+    size_t from_row;
+    size_t from_col;
+    size_t to_row;
+    size_t to_col;
+
+    bool operator==(const MoveKey& other) const noexcept {
+        return from_row == other.from_row
+            && from_col == other.from_col
+            && to_row == other.to_row
+            && to_col == other.to_col;
+    }
+};
+
+struct MoveKeyHash {
+    size_t operator()(const MoveKey& key) const noexcept {
+        size_t seed = std::hash<size_t>{}(key.from_row);
+        seed ^= std::hash<size_t>{}(key.from_col) + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<size_t>{}(key.to_row) + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<size_t>{}(key.to_col) + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        return seed;
+    }
+};
+
+inline MoveKey make_move_key(const Move& move){
+    return MoveKey{
+        move.first.first,
+        move.first.second,
+        move.second.first,
+        move.second.second,
+    };
+}
 
 struct RootUpdate {
     Move best_move;
@@ -27,6 +61,7 @@ struct SearchContext {
     ParamMap params;
     std::shared_ptr<TranspositionTable> tt;  // Transposition table
     std::vector<std::array<Move, 2>> killer_moves;  // [ply][0..1]
+    std::unordered_map<MoveKey, int, MoveKeyHash> history_moves;
     std::function<void(const RootUpdate&)> on_root_update;
 
     void reset(){
@@ -35,6 +70,7 @@ struct SearchContext {
         tt_hits = 0;
         seldepth = 0;
         killer_moves.clear();
+        history_moves.clear();
     }
 
     void prepare_killer_moves(size_t max_depth){

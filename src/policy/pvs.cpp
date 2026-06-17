@@ -31,7 +31,9 @@ static int score_move(
     const Move& move,
     uint32_t tt_best_move_data,
     const std::array<Move, 2>* killer_slots,
-    bool use_killers
+    bool use_killers,
+    const SearchContext* ctx,
+    bool use_history
 ) {
     // 1. TT Best Move 優先權最高
     if (tt_best_move_data != 0 && is_same_move(move, tt_best_move_data)) {
@@ -41,6 +43,13 @@ static int score_move(
     if (use_killers && killer_slots != nullptr &&
         (move == (*killer_slots)[0] || move == (*killer_slots)[1])) {
         return 500000;
+    }
+
+    if(use_history && ctx != nullptr){
+        const auto it = ctx->history_moves.find(make_move_key(move));
+        if(it != ctx->history_moves.end()){
+            return 1000 + it->second;
+        }
     }
 
     if (is_capture_move(state, move)) {
@@ -127,8 +136,8 @@ int PVS::eval_ctx(
     if(state->legal_actions.size() > 1){
         std::sort(state->legal_actions.begin(), state->legal_actions.end(),
             [&](const Move& a, const Move& b){
-                return score_move(state, a, tt_move, killers, true)
-                     > score_move(state, b, tt_move, killers, true);
+                return score_move(state, a, tt_move, killers, p.enable_killer_moves, &ctx, p.enable_history_moves)
+                     > score_move(state, b, tt_move, killers, p.enable_killer_moves, &ctx, p.enable_history_moves);
             });
     }
 
@@ -186,6 +195,13 @@ int PVS::eval_ctx(
             if (!is_capture_move(state, action)) {
                 ctx.record_killer(static_cast<size_t>(ply), action);
             }
+            if (!is_capture_move(state, action) && p.enable_history_moves) {
+                auto& score = ctx.history_moves[make_move_key(action)];
+                score += depth * depth;
+                if(score > 100000){
+                    score = 100000;
+                }
+            }
             break; 
         }
     }
@@ -202,7 +218,6 @@ int PVS::eval_ctx(
         } else if (best_score >= beta) {
             bound_type = BOUND_LOWER;
         }
-
         uint32_t best_move_encoded = 0; 
         if(found_best_move) {
             best_move_encoded = encode_move(best_move); 
@@ -266,7 +281,7 @@ int PVS::quiescence_search(
     if (p.use_mvv_lva) {
         std::sort(captures.begin(), captures.end(), 
             [&](const Move& a, const Move& b) {
-                return score_move(state, a, 0, nullptr, false) > score_move(state, b, 0, nullptr, false);
+                return score_move(state, a, 0, nullptr, false, nullptr, false) > score_move(state, b, 0, nullptr, false, nullptr, false);
             });
     }
 
@@ -337,12 +352,18 @@ SearchResult PVS::search(
 
     best_result_so_far.best_move = state->legal_actions[0];
 
+    int previous_iteration_score = 0;
+    bool have_previous_iteration_score = false;
+
     for (int current_depth = 1; current_depth <= depth; current_depth++) {
         int best_score = -1000000; 
         int alpha = -1000000;
         int beta = 1000000;
-        bool first_move = true;
-        int move_index = 0;
+        if(have_previous_iteration_score){
+            const int aspiration_window = 50;
+            alpha = previous_iteration_score - aspiration_window;
+            beta = previous_iteration_score + aspiration_window;
+        }
         int total_moves = (int)state->legal_actions.size();
         
         Move current_depth_best_move = state->legal_actions[0];
@@ -356,49 +377,75 @@ SearchResult PVS::search(
                     if (a_is_best && !b_is_best) return true;
                     if (!a_is_best && b_is_best) return false;
                 }
-                return score_move(state, a, 0, root_killers, true)
-                     > score_move(state, b, 0, root_killers, true);
+                return score_move(state, a, 0, root_killers, true, &ctx, p.enable_history_moves)
+                     > score_move(state, b, 0, root_killers, true, &ctx, p.enable_history_moves);
             });
 
-        for(auto& action : state->legal_actions){
-            State* next = state->next_state(action);
-            int child_score;
+        auto search_root_once = [&](int search_alpha, int search_beta){
+            int local_best_score = -1000000;
+            Move local_best_move = state->legal_actions[0];
+            bool local_first_move = true;
+            int local_move_index = 0;
 
-            if (p.use_pvs) {
-                if (first_move) {
-                    child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -beta, -alpha);
-                    first_move = false;
+            for(auto& action : state->legal_actions){
+                State* next = state->next_state(action);
+                int child_score;
+
+                if (p.use_pvs) {
+                    if (local_first_move) {
+                        child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -search_beta, -search_alpha);
+                        local_first_move = false;
+                    } else {
+                        child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -search_alpha - 1, -search_alpha);
+
+                        int tentative_score = next->same_player_as_parent() ? child_score : -child_score;
+                        if (tentative_score > search_alpha && tentative_score < search_beta && !ctx.stop) {
+                            child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -search_beta, -search_alpha);
+                        }
+                    }
                 } else {
-                    child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -alpha - 1, -alpha);
-                    
-                    int tentative_score = next->same_player_as_parent() ? child_score : -child_score;
-                    if (tentative_score > alpha && tentative_score < beta && !ctx.stop) { // 加上 !ctx.stop 保險
-                        child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -beta, -alpha);
+                    child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -search_beta, -search_alpha);
+                }
+
+                int score = next->same_player_as_parent() ? child_score : -child_score;
+                delete next;
+
+                if (ctx.stop) {
+                    break;
+                }
+
+                if(score > local_best_score){
+                    local_best_score = score;
+                    local_best_move = action;
+
+                    if(p.report_partial && ctx.on_root_update){
+                       ctx.on_root_update({local_best_move, local_best_score, current_depth, local_move_index + 1, total_moves});
                     }
                 }
-            } else {
-                child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -beta, -alpha);
+
+                local_move_index++;
             }
-            
-            int score = next->same_player_as_parent() ? child_score : -child_score;
-            delete next;
 
-            if (ctx.stop) break;
+            return std::pair<int, Move>{local_best_score, local_best_move};
+        };
 
-            if(score > best_score){
-                best_score = score;
-                current_depth_best_move = action;
-
-                if(p.report_partial && ctx.on_root_update){
-                   ctx.on_root_update({current_depth_best_move, best_score, current_depth, move_index + 1, total_moves});
-                }
-
-                if(best_score > alpha){
-                    alpha = best_score;
-                }
-            }
-            move_index++;
+        auto [search_score, search_best_move] = search_root_once(alpha, beta);
+        if(!ctx.stop && have_previous_iteration_score && search_score <= alpha){
+            auto widened = search_root_once(-1000000, beta);
+            search_score = widened.first;
+            search_best_move = widened.second;
+        } else if(!ctx.stop && have_previous_iteration_score && search_score >= beta){
+            auto widened = search_root_once(alpha, 1000000);
+            search_score = widened.first;
+            search_best_move = widened.second;
         }
+
+        if (ctx.stop) {
+            break; // 被超時打斷，放棄這個深度的結果
+        }
+
+        best_score = search_score;
+        current_depth_best_move = search_best_move;
         
         if (ctx.stop) {
             break; // 被超時打斷，放棄這個深度的結果
@@ -408,6 +455,8 @@ SearchResult PVS::search(
         best_result_so_far.depth = current_depth;
         best_result_so_far.score = best_score;
         best_result_so_far.best_move = current_depth_best_move;
+        previous_iteration_score = best_score;
+        have_previous_iteration_score = true;
         
         if (best_score > 900000) break;
     }
@@ -425,6 +474,8 @@ ParamMap PVS::default_params(){
         {"UseQuiescenceSearch", "true"},
         {"UsePVS", "true"},
         {"UseMVVLVA", "true"}, 
+        {"EnableKillerMoves", "true"},
+        {"EnableHistoryHeuristic", "true"},
     };
 }
 
@@ -438,5 +489,7 @@ std::vector<ParamDef> PVS::param_defs(){
         {"UseQuiescenceSearch", ParamDef::CHECK, "true"},
         {"UsePVS", ParamDef::CHECK, "true"},
         {"UseMVVLVA", ParamDef::CHECK, "true"},
+        {"EnableKillerMoves", ParamDef::CHECK, "true"},
+        {"EnableHistoryHeuristic", ParamDef::CHECK, "true"},
     };
 }

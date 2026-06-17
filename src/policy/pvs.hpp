@@ -13,6 +13,8 @@ struct PVSParams {
     bool use_quiescence_search = true;
     bool use_pvs = true; // Enable Principal Variation Search
     bool use_mvv_lva = true; // Enable MVV-LVA move ordering
+    bool enable_killer_moves = true; // Enable killer move heuristic
+    bool enable_history_moves = true; // Enable history heuristic
 
     static PVSParams from_map(const ParamMap& m){
         PVSParams p;
@@ -24,6 +26,8 @@ struct PVSParams {
         p.use_quiescence_search = param_bool(m, "UseQuiescenceSearch", true);
         p.use_pvs           = param_bool(m, "UsePVS", true);
         p.use_mvv_lva       = param_bool(m, "UseMVVLVA", true);
+        p.enable_killer_moves = param_bool(m, "EnableKillerMoves", true);
+        p.enable_history_moves = param_bool(m, "EnableHistoryHeuristic", true);
         return p;
     }
 };
