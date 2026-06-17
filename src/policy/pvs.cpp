@@ -318,7 +318,7 @@ SearchResult PVS::search(
     best_result_so_far.best_move = state->legal_actions[0];
 
     // ========================================================
-    // ★ 核心升級：實作 Iterative Deepening (迭代加深)
+    // 實作 Iterative Deepening (迭代加深)
     // ========================================================
     for (int current_depth = 1; current_depth <= depth; current_depth++) {
         int best_score = -1000000; 
@@ -330,7 +330,7 @@ SearchResult PVS::search(
         
         Move current_depth_best_move = state->legal_actions[0];
 
-        // 排序：將【上一次深度搜尋】拿到的最佳解排在第一位，讓 PVS 發揮核彈級威力
+        // 排序：將【上一次深度搜尋】拿到的最佳解排在第一位，讓 PVS 發揮威力
         if (p.use_mvv_lva) {
             std::sort(state->legal_actions.begin(), state->legal_actions.end(), 
                 [&](const Move& a, const Move& b) {
@@ -347,29 +347,30 @@ SearchResult PVS::search(
 
         for(auto& action : state->legal_actions){
             State* next = state->next_state(action);
-            GameHistory root_history;
+            
+            // 【失憶症修正】：直接傳遞真實的 history，絕對不能在這裡 new 一個空的！
             int child_score;
 
             if (p.use_pvs) {
                 if (first_move) {
-                    child_score = eval_ctx(next, current_depth - 1, root_history, 1, ctx, p, -beta, -alpha);
+                    child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -beta, -alpha);
                     first_move = false;
                 } else {
-                    child_score = eval_ctx(next, current_depth - 1, root_history, 1, ctx, p, -alpha - 1, -alpha);
+                    child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -alpha - 1, -alpha);
                     
                     int tentative_score = next->same_player_as_parent() ? child_score : -child_score;
                     if (tentative_score > alpha && tentative_score < beta) {
-                        child_score = eval_ctx(next, current_depth - 1, root_history, 1, ctx, p, -beta, -alpha);
+                        child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -beta, -alpha);
                     }
                 }
             } else {
-                child_score = eval_ctx(next, current_depth - 1, root_history, 1, ctx, p, -beta, -alpha);
+                child_score = eval_ctx(next, current_depth - 1, history, 1, ctx, p, -beta, -alpha);
             }
             
             int score = next->same_player_as_parent() ? child_score : -child_score;
             delete next;
 
-            // ★ 救命防護網：如果超時被觸發了，中止這個深度的後續計算！
+            // 救命防護網：如果超時被觸發了，中止這個深度的後續計算！
             if (ctx.stop) break;
 
             if(score > best_score){
@@ -387,8 +388,7 @@ SearchResult PVS::search(
             move_index++;
         }
         
-        // ★ 救命防護網：如果迴圈是因為超時斷掉的，代表這個 current_depth 算出來的分數是垃圾，
-        // 我們直接 break 放棄，保留【上一層安全算完】的 best_result_so_far！
+        // 救命防護網：如果迴圈是因為超時斷掉的，保留【上一層安全算完】的 best_result_so_far！
         if (ctx.stop) {
             break;
         }
@@ -398,7 +398,7 @@ SearchResult PVS::search(
         best_result_so_far.score = best_score;
         best_result_so_far.best_move = current_depth_best_move;
         
-        // (選用) 如果已經算到絕殺步 (Mate)，可以提早結束
+        // 如果已經算到絕殺步 (Mate)，提早結束
         if (best_score > 900000) break;
     }
 

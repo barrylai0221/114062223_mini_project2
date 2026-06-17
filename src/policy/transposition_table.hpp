@@ -81,12 +81,25 @@ public:
                BoundType bound, uint32_t best_move = 0) {
         uint64_t index = zobrist & table_mask;
         
-        // Linear probing for hash collision resolution
-        while(table[index].is_valid() && table[index].zobrist != zobrist) {
+        // 【防死當修正】：限制最多只探測 8 次，絕對不能無窮迴圈！
+        uint64_t best_index = index;
+        int min_depth = 10000;
+        
+        for (int probes = 0; probes < 8; ++probes) {
+            // 如果找到空位，或者找到完全相同的盤面，就決定存在這裡
+            if (!table[index].is_valid() || table[index].zobrist == zobrist) {
+                best_index = index;
+                break;
+            }
+            // 記錄這 8 個位置裡面，搜尋深度最淺 (價值最低) 的那個位置當作備胎
+            if (table[index].depth < min_depth) {
+                min_depth = table[index].depth;
+                best_index = index;
+            }
             index = (index + 1) & table_mask;
         }
         
-        TTEntry& entry = table[index];
+        TTEntry& entry = table[best_index];
         
         // Replace if: empty, different hash, or shallower depth
         bool should_replace = !entry.is_valid() || 
@@ -121,8 +134,7 @@ public:
             }
             
             if(entry.zobrist == zobrist) {
-                // 【修正重點】: 只要盤面相同，不管深度夠不夠，都把最佳步拿出來！
-                // 這對 Iterative Deepening 的排序至關重要。
+                // 只要盤面相同，不管深度夠不夠，都把最佳步拿出來！
                 out_best_move = entry.best_move_data;
                 
                 // 只有在快取深度 >= 當前要求深度時，才能直接使用分數剪枝
@@ -145,6 +157,8 @@ public:
                         }
                     }
                 }
+                // 【加速修正】：找到了盤面但深度不夠，就沒必要繼續往下找了，直接 return false
+                return false; 
             }
             
             index = (index + 1) & table_mask;
