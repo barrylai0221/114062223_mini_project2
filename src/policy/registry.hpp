@@ -14,6 +14,7 @@
 #include "search_types.hpp"
 #include "game_history.hpp"
 #include "minimax.hpp"
+#include "pvs.hpp"
 #include "random.hpp"
 
 struct AlgoEntry {
@@ -31,6 +32,14 @@ inline const std::vector<AlgoEntry>& get_algo_table(){
             MiniMax::param_defs(),
             [](State* s, int d, GameHistory& h, SearchContext& c){
                 return MiniMax::search(s, d, h, c);
+            }
+        },
+        {
+            "pvs",
+            PVS::default_params(),
+            PVS::param_defs(),
+            [](State* s, int d, GameHistory& h, SearchContext& c){
+                return PVS::search(s, d, h, c);
             }
         },
         {

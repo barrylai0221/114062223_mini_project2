@@ -5,8 +5,7 @@
 
 /*============================================================
  * Transposition Table Entry
- * 
- * Stores search result for a position with Zobrist hashing
+ * * Stores search result for a position with Zobrist hashing
  *============================================================*/
 
 enum BoundType {
@@ -33,8 +32,7 @@ struct TTEntry {
 
 /*============================================================
  * Transposition Table
- * 
- * Hash table using Zobrist hashing for storing search results
+ * * Hash table using Zobrist hashing for storing search results
  * Uses linear probing with replacement strategy
  *============================================================*/
 
@@ -122,25 +120,29 @@ public:
                 break;  // Empty slot, entry not found
             }
             
-            if(entry.zobrist == zobrist && entry.depth >= depth) {
-                // Found matching entry with sufficient depth
+            if(entry.zobrist == zobrist) {
+                // 【修正重點】: 只要盤面相同，不管深度夠不夠，都把最佳步拿出來！
+                // 這對 Iterative Deepening 的排序至關重要。
                 out_best_move = entry.best_move_data;
                 
-                // Return score based on bound type
-                if(entry.bound_type == BOUND_EXACT) {
-                    out_score = entry.score;
-                    return true;
-                } else if(entry.bound_type == BOUND_LOWER) {
-                    // Score >= lower bound
-                    if(entry.score >= beta) {
+                // 只有在快取深度 >= 當前要求深度時，才能直接使用分數剪枝
+                if(entry.depth >= depth) {
+                    // Return score based on bound type
+                    if(entry.bound_type == BOUND_EXACT) {
                         out_score = entry.score;
-                        return true;  // Beta cutoff
-                    }
-                } else if(entry.bound_type == BOUND_UPPER) {
-                    // Score <= upper bound
-                    if(entry.score <= alpha) {
-                        out_score = entry.score;
-                        return true;  // Alpha cutoff
+                        return true;
+                    } else if(entry.bound_type == BOUND_LOWER) {
+                        // Score >= lower bound
+                        if(entry.score >= beta) {
+                            out_score = entry.score;
+                            return true;  // Beta cutoff
+                        }
+                    } else if(entry.bound_type == BOUND_UPPER) {
+                        // Score <= upper bound
+                        if(entry.score <= alpha) {
+                            out_score = entry.score;
+                            return true;  // Alpha cutoff
+                        }
                     }
                 }
             }

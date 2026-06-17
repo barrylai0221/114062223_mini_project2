@@ -118,6 +118,7 @@ int main(int argc, char* argv[]) {
 
         /* Each algorithm */
         for(const auto& algo : algos){
+            if (algo.name == "random") continue; // Skip random for benchmark clarity
             std::cout << std::setw(12) << algo.name;
             double prev = 0;
             for(int d = 1; d <= max_depth; d++){
