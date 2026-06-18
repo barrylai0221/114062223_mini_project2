@@ -351,6 +351,8 @@ SearchResult MiniMax::search(
     if (state->legal_actions.empty()) return best_result_so_far;
 
     best_result_so_far.best_move = state->legal_actions[0];
+    // Store the first move as fallback in case search is interrupted
+    Move fallback_move = state->legal_actions[0];
 
     int previous_iteration_score = 0;
     bool have_previous_iteration_score = false;
@@ -440,25 +442,34 @@ SearchResult MiniMax::search(
             search_best_move = widened.second;
         }
 
-        if (ctx.stop) {
-            break;
-        }
-
         best_score = search_score;
         current_depth_best_move = search_best_move;
         
-        if (ctx.stop) {
-            break;
-        }
-        
+        // Always update best_result_so_far with current depth result, even if interrupted
         best_result_so_far.depth = current_depth;
         best_result_so_far.score = best_score;
         best_result_so_far.best_move = current_depth_best_move;
         previous_iteration_score = best_score;
         have_previous_iteration_score = true;
         
+        if (ctx.stop) {
+            break;
+        }
+        
         if (best_score > 900000) break;
     }
+
+    // Safety check: ensure best_move is always valid (fallback to first move if needed)
+    if (best_result_so_far.best_move == Move{} || 
+        (best_result_so_far.best_move.first.first == 0 && 
+         best_result_so_far.best_move.first.second == 0 &&
+         best_result_so_far.best_move.second.first == 0 &&
+         best_result_so_far.best_move.second.second == 0)) {
+        best_result_so_far.best_move = fallback_move;
+    }
+
+    // Set the nodes count so ubgi.cpp knows search was performed
+    best_result_so_far.nodes = ctx.nodes;
 
     return best_result_so_far;
 } 
