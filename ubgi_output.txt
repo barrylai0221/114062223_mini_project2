@@ -1,0 +1,17 @@
+id name MiniChess
+id author MiniChess Team
+option name GameName type string default MiniChess
+option name BoardWidth type spin default 5 min 1 max 26
+option name BoardHeight type spin default 6 min 1 max 26
+option name Algorithm type combo default minimax var minimax var random
+option name UseKPEval type check default true
+option name UseEvalMobility type check default true
+option name ReportPartial type check default true
+option name UsePVS type check default true
+option name UseTranspositionTable type check default true
+option name UseQuiescenceSearch type check default true
+option name UseMVVLVA type check default true
+option name EnableKillerMoves type check default true
+option name EnableHistoryMoves type check default true
+option name MultiPV type spin default 1 min 1 max 10
+uciok

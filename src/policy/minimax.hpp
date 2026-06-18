@@ -7,11 +7,13 @@ struct MMParams {
     bool use_kp_eval = true;
     bool use_eval_mobility = true;
     bool report_partial = true;
-    bool use_alpha_beta = true;     // Enable alpha-beta pruning
+    bool use_alpha_beta = true;
+    bool use_transposition_table = true;
+    bool use_quiescence_search = true;
+    bool use_pvs = true; // Enable Principal Variation Search (more efficient than basic alpha-beta)
+    bool use_mvv_lva = true; // Enable MVV-LVA move ordering
     bool enable_killer_moves = true; // Enable killer move heuristic
     bool enable_history_moves = true; // Enable history heuristic
-    bool use_transposition_table = true; // Enable transposition table
-    bool use_quiescence_search = true;   // Enable quiescence search
 
     static MMParams from_map(const ParamMap& m){
         MMParams p;
@@ -19,10 +21,12 @@ struct MMParams {
         p.use_eval_mobility = param_bool(m, "UseEvalMobility", true);
         p.report_partial    = param_bool(m, "ReportPartial", true);
         p.use_alpha_beta    = param_bool(m, "UseAlphaBeta", true);
-        p.enable_killer_moves = param_bool(m, "EnableKillerMoves", true);
-        p.enable_history_moves = param_bool(m, "EnableHistoryHeuristic", true);
         p.use_transposition_table = param_bool(m, "UseTranspositionTable", true);
         p.use_quiescence_search = param_bool(m, "UseQuiescenceSearch", true);
+        p.use_pvs           = param_bool(m, "UsePVS", true);
+        p.use_mvv_lva       = param_bool(m, "UseMVVLVA", true);
+        p.enable_killer_moves = param_bool(m, "EnableKillerMoves", true);
+        p.enable_history_moves = param_bool(m, "EnableHistoryHeuristic", true);
         return p;
     }
 };
@@ -40,7 +44,6 @@ public:
         int beta = 100000
     );
     
-    // Quiescence search: search only captures until position is quiet
     static int quiescence_search(
         State *state,
         int depth,

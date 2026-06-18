@@ -1,0 +1,4 @@
+uci
+position startpos
+go depth 2 movetime 1000
+quit
