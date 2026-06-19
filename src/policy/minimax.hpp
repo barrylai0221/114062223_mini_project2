@@ -14,6 +14,7 @@ struct MMParams {
     bool use_mvv_lva = true; // Enable MVV-LVA move ordering
     bool enable_killer_moves = true; // Enable killer move heuristic
     bool enable_history_moves = true; // Enable history heuristic
+    bool use_null_move_pruning = true; // Enable Null Move Pruning for early cutoffs
 
     static MMParams from_map(const ParamMap& m){
         MMParams p;
@@ -27,6 +28,7 @@ struct MMParams {
         p.use_mvv_lva       = param_bool(m, "UseMVVLVA", true);
         p.enable_killer_moves = param_bool(m, "EnableKillerMoves", true);
         p.enable_history_moves = param_bool(m, "EnableHistoryHeuristic", true);
+        p.use_null_move_pruning = param_bool(m, "UseNullMovePruning", true);
         return p;
     }
 };

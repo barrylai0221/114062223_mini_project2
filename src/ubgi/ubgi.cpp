@@ -385,6 +385,8 @@ static void do_search(
             << " nps " << nps;
         if(!result.pv.empty()){
             info << " pv " << format_pv(result.pv);
+        } else if(best_move != Move{}){
+            info << " currmove " << move_to_str(best_move);
         }
 
         if(alive()){

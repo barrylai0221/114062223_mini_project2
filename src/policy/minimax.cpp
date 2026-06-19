@@ -131,6 +131,18 @@ int MiniMax::eval_ctx(
     }
     history.push(zobrist);
 
+    // Reverse Futility Pruning (RFP): at SHALLOW depths, if static eval
+    // already beats beta by a margin, we can safely prune.
+    // Only valid near leaf nodes (depth <= 3) where static eval is reliable.
+    if (p.use_null_move_pruning && depth >= 1 && depth <= 3 && ply > 0) {
+        int margin = 80 * depth; // scale margin by depth (depth1=80, depth2=160, depth3=240)
+        int standing_pat = state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history);
+        if (standing_pat >= beta + margin) {
+            history.pop(zobrist);
+            return beta;
+        }
+    }
+
     const auto* killers = killer_slots_for(ctx, ply);
 
     if(state->legal_actions.size() > 1){
@@ -177,7 +189,7 @@ int MiniMax::eval_ctx(
             child_score = eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
             score = same ? child_score : -child_score;
         }
-        
+
         delete next;
 
         if(score > best_score){
@@ -202,9 +214,9 @@ int MiniMax::eval_ctx(
                     score = 100000;
                 }
             }
-            break; 
+            break;
         }
-        
+
         first_move = false;
     }
 
@@ -442,19 +454,23 @@ SearchResult MiniMax::search(
             search_best_move = widened.second;
         }
 
+        if (ctx.stop) {
+            break; // search was interrupted, discard this depth's result
+        }
+
         best_score = search_score;
         current_depth_best_move = search_best_move;
-        
-        // Always update best_result_so_far with current depth result, even if interrupted
+
+        if (ctx.stop) {
+            break;
+        }
+
+        // Only save if completed cleanly
         best_result_so_far.depth = current_depth;
         best_result_so_far.score = best_score;
         best_result_so_far.best_move = current_depth_best_move;
         previous_iteration_score = best_score;
         have_previous_iteration_score = true;
-        
-        if (ctx.stop) {
-            break;
-        }
         
         if (best_score > 900000) break;
     }
@@ -486,6 +502,7 @@ ParamMap MiniMax::default_params(){
         {"UseMVVLVA", "true"}, 
         {"EnableKillerMoves", "true"},
         {"EnableHistoryHeuristic", "true"},
+        {"UseNullMovePruning", "true"},
     };
 }
 
@@ -501,5 +518,6 @@ std::vector<ParamDef> MiniMax::param_defs(){
         {"UseMVVLVA", ParamDef::CHECK, "true"},
         {"EnableKillerMoves", ParamDef::CHECK, "true"},
         {"EnableHistoryHeuristic", ParamDef::CHECK, "true"},
+        {"UseNullMovePruning", ParamDef::CHECK, "true"},
     };
 }

@@ -109,20 +109,26 @@ int State::evaluate(
                 //pst代表不同位置的權重
                 if((piece = self_board[i][j])){
                     self_score += kp_material[piece];
-                    self_score += pst[piece-1][i][j];
+                    // PST: player 0 (white) advances up (row decreasing) → direct index
+                    //       player 1 (black) advances down (row increasing) → mirror
+                    int self_row = (this->player == 0) ? i : (BOARD_H - 1 - i);
+                    self_score += pst[piece-1][self_row][j];
                     if(oppn_kr != -1){//oppn_king is still ative
                         self_score += king_tropism(piece, i, j, oppn_kr, oppn_kc);
                     }
                 }
                 if((piece = oppn_board[i][j])){
                     oppn_score += kp_material[piece];
-                    oppn_score += pst[piece-1][BOARD_H-1-i][j];
+                    // Opponent's PST: opposite direction from self
+                    int oppn_row = (this->player == 0) ? (BOARD_H - 1 - i) : i;
+                    oppn_score += pst[piece-1][oppn_row][j];
                     if(self_kr != -1){//self_king is still ative
                         oppn_score += king_tropism(piece, i, j, self_kr, self_kc);
                     }
                 }
             }
         }
+
 
     }else{
         /* === Simple material-only eval === */
